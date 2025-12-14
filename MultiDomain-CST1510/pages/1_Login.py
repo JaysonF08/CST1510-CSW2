@@ -6,42 +6,83 @@ from app.data.users import (
     validate_username,
     validate_password,
     register_user,
-    login_user,
+    authenticate_user,
+    is_admin_credentials,
+    ensure_seed_admin,
 )
+
 from app.data import db
 
-st.set_page_config(page_title="Cybersecurity Login", page_icon="🔒")
+st.set_page_config(page_title="Cybersecurity Login", layout="wide")
+st.session_state["current_page"] = "Login"
 
-# Ensure tables exist (safe to call multiple times)
+
+# INIT DB + MIGRATION
+
 if "db_initialised" not in st.session_state:
     db.create_tables()
     db.migrate_users_from_file()
     st.session_state["db_initialised"] = True
 
+# Always run seed (safe + fixes Streamlit session not re-running it)
+ensure_seed_admin()
+
 st.title("Login Page")
 st.write("A secure login page.")
 
-
-# --------- Menu: Login or Register ---------
 mode = st.radio(
     "Select an option:",
     ("Login", "Register a new user"),
     horizontal=True,
 )
 
-# Session state to remember login status
+# global session auth state
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
+if "username" not in st.session_state:
     st.session_state["username"] = None
+if "role" not in st.session_state:
+    st.session_state["role"] = None
 
 
-# --------- REGISTER SECTION ---------
+
+# REGISTER
+
 if mode == "Register a new user":
     st.subheader("Create a new account")
+
+    st.info(
+        "Username rules:\n"
+        "- at least 2 characters\n"
+        "- no spaces\n"
+        "- only letters/numbers/underscore\n\n"
+        "Password rules:\n"
+        "- minimum 5 characters\n"
+        "- at least 1 letter\n"
+        "- at least 1 number\n"
+        "- at least 1 special character (e.g., @, #, !)"
+    )
 
     new_username = st.text_input("Username")
     new_password = st.text_input("Password", type="password")
     confirm_password = st.text_input("Confirm Password", type="password")
+
+    st.markdown("**Role:**")
+    register_as_admin = st.checkbox("Register as admin")
+
+    admin_ok = True
+    admin_user = ""
+    admin_pass = ""
+
+    if register_as_admin:
+        st.warning("Admin registration needs an existing admin to approve it.")
+        admin_user = st.text_input("Existing admin username")
+        admin_pass = st.text_input("Existing admin password", type="password")
+
+        if admin_user and admin_pass:
+            admin_ok = is_admin_credentials(admin_user, admin_pass)
+        else:
+            admin_ok = False
 
     if st.button("Register"):
         if not new_username or not new_password or not confirm_password:
@@ -57,14 +98,21 @@ if mode == "Register a new user":
                 elif new_password != confirm_password:
                     st.error("Passwords do not match.")
                 else:
-                    success = register_user(new_username, new_password)
-                    if success:
-                        st.success("User registered successfully! You can now login.")
+                    role = "admin" if register_as_admin else "analyst"
+
+                    if role == "admin" and not admin_ok:
+                        st.error("Admin approval failed. Use a valid existing admin login.")
                     else:
-                        st.error("That username already exists. Please choose another one.")
+                        success = register_user(new_username, new_password, role=role)
+                        if success:
+                            st.success(f"User registered as **{role}**. You can now login.")
+                        else:
+                            st.error("That username already exists. Please choose another one.")
 
 
-# --------- LOGIN SECTION ---------
+
+# LOGIN
+
 if mode == "Login":
     st.subheader("Login to your account")
 
@@ -75,21 +123,22 @@ if mode == "Login":
         if not username or not password:
             st.error("Please enter both username and password.")
         else:
-            ok = login_user(username, password)
+            ok, role = authenticate_user(username, password)
             if ok:
                 st.session_state["logged_in"] = True
                 st.session_state["username"] = username
-                st.success(f"Welcome, {username}!")
+                st.session_state["role"] = role
 
-                # In Week 9, navigate to your Cyber dashboard page
-                st.info("Redirecting to Cybersecurity dashboard...")
+                st.success(f"Welcome, {username}!")
                 st.switch_page("pages/2_Cybersecurity.py")
             else:
                 st.error("Invalid username or password.")
 
 
-# Sidebar status
-if st.session_state["logged_in"]:
-    st.sidebar.success(f"Logged in as: {st.session_state['username']}")
+# sidebar status
+if st.session_state.get("logged_in"):
+    st.sidebar.success(
+        f"Logged in as: {st.session_state.get('username')} ({st.session_state.get('role')})"
+    )
 else:
     st.sidebar.warning("Not logged in.")
